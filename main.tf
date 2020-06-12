@@ -77,7 +77,7 @@ resource "aws_iam_role_policy" "s3_access_policy" {
           "s3:*"
         ],
         "Effect": "Allow",
-        "Resource": ["arn:aws:s3:::tempcompclinicdev", "arn:aws:s3:::tempcompclinicdev/*"]
+        "Resource": ["arn:aws:s3:::old-comp-clinic", "arn:aws:s3:::old-comp-clinic/*"]
       }
     ]
   }
@@ -142,8 +142,10 @@ resource "aws_instance" "old-cms" {
   iam_instance_profile        = aws_iam_instance_profile.allow_s3_profile.name
   user_data                   = <<-EOF
     #!/bin/bash
+    ##
     sudo yum update -y
-    sudo yum upgrade -y    
+    sudo yum upgrade -y
+    ##  
     sudo yum -y install ntp
     sudo ntpdate pool.ntp.org
     sudo yum -y install httpd
@@ -156,8 +158,8 @@ resource "aws_instance" "old-cms" {
     sudo systemctl enable httpd
     sudo systemctl enable mariadb
     ##
-    aws s3 cp s3://tempcompclinicdev/cmsccdb_prod.sql /home/ec2-user/cmscc.sql
-    aws s3 cp s3://tempcompclinicdev/phpcc1-dev.tar /home/ec2-user/php.tar
+    aws s3 cp s3://old-comp-clinic/cmsccdb_prod.sql /home/ec2-user/cmscc.sql
+    aws s3 cp s3://old-comp-clinic/cmss.tar /home/ec2-user/php.tar
     ##
     sudo tar -xf /home/ec2-user/php.tar -C /opt
     sudo usermod -a -G apache ec2-user
@@ -211,13 +213,12 @@ resource "aws_instance" "old-cms" {
     sudo sed -i 's|/etc/pki/tls/certs/localhost.crt|/etc/pki/tls/certs/cmscc.crt|g' /etc/httpd/conf.d/ssl.conf
     sudo sed -i 's|/etc/pki/tls/private/localhost.key|/etc/pki/tls/private/cmscc.key|g' /etc/httpd/conf.d/ssl.conf
     ##
-    sudo sed -i '0,/exit/{s|exit|//exit|}' /opt/webroot/cms3/inc/database_defines.php
-    sudo sed -i 's|bulldog.byu.edu|127.0.0.1|g' /opt/webroot/cms3/inc/database_defines.php
-    sudo sed -i 's|cmsccapp|${data.aws_ssm_parameter.username.value}|g' /opt/webroot/cms3/inc/database_defines.php
-    sudo sed -i 's|VzrAbZFvs3m6jf|${data.aws_ssm_parameter.password.value}|g' /opt/webroot/cms3/inc/database_defines.php
-    sudo sed -i 's|cmsccdb_stage|${data.aws_ssm_parameter.database.value}|g' /opt/webroot/cms3/inc/database_defines.php
-    sudo sed -i "s|https://cmscc-stg.byu.edu/cms3/|https://$MYIP/cms3/|g" /opt/webroot/cms3/inc/siteconfig_vars.php
-    sudo sed -i "s|https://cmscc-stg.byu.edu/client/|https://$MYIP/client/|g" /opt/webroot/cms3/inc/siteconfig_vars.php
+    sudo sed -i "s|'DB_HOST', ''|'DB_HOST', '127.0.0.1|g" /opt/webroot/cms3/inc/database_defines.php
+    sudo sed -i "s|'DB_USERNAME', ''|'DB_USERNAME', '${data.aws_ssm_parameter.username.value}'|g" /opt/webroot/cms3/inc/database_defines.php
+    sudo sed -i "s|'DB_PASSWORD', ''|'DB_PASSWORD', '${data.aws_ssm_parameter.password.value}'|g" /opt/webroot/cms3/inc/database_defines.php
+    sudo sed -i "s|'DB_DATABASE', ''|'DB_DATABASE', '${data.aws_ssm_parameter.database.value}'|g" /opt/webroot/cms3/inc/database_defines.php
+    sudo sed -i "s|https://cmscc.byu.edu/cms3/|https://$MYIP/cms3/|g" /opt/webroot/cms3/inc/siteconfig_vars.php
+    sudo sed -i "s|https://cmscc.byu.edu/client/|https://$MYIP/client/|g" /opt/webroot/cms3/inc/siteconfig_vars.php
     ##
     sudo systemctl restart httpd
     ##
