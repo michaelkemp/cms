@@ -30,6 +30,62 @@ resource "local_file" "write-key" {
   filename = "${path.module}/kempy-compclinic-key.pem"
 }
 
+data "aws_ssm_parameter" "root" {
+  name = "/old/cms/root"
+}
+data "aws_ssm_parameter" "database" {
+  name = "/old/cms/database"
+}
+data "aws_ssm_parameter" "username" {
+  name = "/old/cms/username"
+}
+data "aws_ssm_parameter" "password" {
+  name = "/old/cms/password"
+}
+
+resource "aws_iam_role" "ec2_assume_role" {
+  name               = "ec2_assume_role"
+  assume_role_policy = <<-EOF
+    {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Action": "sts:AssumeRole",
+          "Principal": {
+            "Service": "ec2.amazonaws.com"
+          },
+          "Effect": "Allow",
+          "Sid": ""
+        }
+      ]
+    }
+    EOF
+}
+
+resource "aws_iam_role_policy" "s3_access_policy" {
+  name   = "s3_access_policy"
+  role   = aws_iam_role.ec2_assume_role.id
+  policy = <<-EOF
+  {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Action": [
+          "s3:*"
+        ],
+        "Effect": "Allow",
+        "Resource": ["arn:aws:s3:::tempcompclinicdev", "arn:aws:s3:::tempcompclinicdev/*"]
+      }
+    ]
+  }
+  EOF
+}
+
+resource "aws_iam_instance_profile" "allow_s3_profile" {
+  name = "allow_s3_profile"
+  role = aws_iam_role.ec2_assume_role.name
+}
+
 resource "aws_security_group" "security_group" {
   name        = "kempy_security_group"
   description = "kempy Security Group for CMS"
@@ -52,7 +108,7 @@ resource "aws_security_group" "security_group" {
     protocol    = "TCP"
     cidr_blocks = ["10.0.0.0/8"]
   }
-  
+
   egress {
     from_port   = 0
     to_port     = 0
@@ -74,15 +130,13 @@ data "aws_ami" "amazon-linux-2" {
   }
 }
 resource "aws_instance" "old-cms" {
-  ami           = data.aws_ami.amazon-linux-2.id
-  instance_type = "t2.micro"
-  tags = {
-    Name = "kempy Old CMS"
-  }
+  ami                         = data.aws_ami.amazon-linux-2.id
+  instance_type               = "t2.micro"
   subnet_id                   = var.vpn-dept-oregon-dev-private-a
   associate_public_ip_address = false
   key_name                    = aws_key_pair.generated-key.key_name
   vpc_security_group_ids      = [aws_security_group.security_group.id]
+  iam_instance_profile        = aws_iam_instance_profile.allow_s3_profile.name
   user_data                   = <<-EOF
     #!/bin/bash
     sudo yum -y install ntp
@@ -96,30 +150,74 @@ resource "aws_instance" "old-cms" {
     sudo systemctl enable ntpd
     sudo systemctl enable httpd
     sudo systemctl enable mariadb
-    sudo mkdir /opt/webroot
-    echo "<?php echo '<p>Hello World</p>'; ?>" > /opt/webroot/index.php
+    ##
+    aws s3 cp s3://tempcompclinicdev/cmsccdb_prod.sql /home/ec2-user/cmscc.sql
+    aws s3 cp s3://tempcompclinicdev/phpcc1-dev.tar /home/ec2-user/php.tar
+    ##
+    sudo tar -xf /home/ec2-user/php.tar -C /opt
     sudo usermod -a -G apache ec2-user
     sudo chown -R ec2-user:apache /opt/webroot
     sudo chmod 2775 /opt/webroot && find /opt/webroot -type d -exec sudo chmod 2775 {} \;
     sudo find /opt/webroot -type f -exec sudo chmod 0664 {} \;
+    ##
     sudo sed -i 's|/var/www/html|/opt/webroot|g' /etc/httpd/conf/httpd.conf
     sudo sed -i 's|/var/www|/opt/webroot|g' /etc/httpd/conf/httpd.conf
     sudo systemctl restart httpd
+    ##
     mysql --user=root <<MYSQL
-    UPDATE mysql.user SET Password=PASSWORD('rootpassword') WHERE User='root';
+    UPDATE mysql.user SET Password=PASSWORD('${data.aws_ssm_parameter.root.value}') WHERE User='root';
     DELETE FROM mysql.user WHERE User='';
     DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');
     DROP DATABASE IF EXISTS test;
     DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';
-    CREATE DATABASE compclinicdb;
-    CREATE USER ccuser@'localhost';
-    SET PASSWORD FOR ccuser@'localhost'=PASSWORD('1BDtIvvXT948ez3p1qu7iIlPkkJj8fVo');
-    GRANT ALL PRIVILEGES ON compclinicdb.* TO ccuser@'localhost' IDENTIFIED BY '1BDtIvvXT948ez3p1qu7iIlPkkJj8fVo';
+    CREATE DATABASE ${data.aws_ssm_parameter.database.value};
+    CREATE USER ${data.aws_ssm_parameter.username.value}@localhost;
+    SET PASSWORD FOR ${data.aws_ssm_parameter.username.value}@localhost=PASSWORD('${data.aws_ssm_parameter.password.value}');
+    GRANT ALL PRIVILEGES ON ${data.aws_ssm_parameter.database.value}.* TO ${data.aws_ssm_parameter.username.value}@localhost IDENTIFIED BY '${data.aws_ssm_parameter.password.value}';
     FLUSH PRIVILEGES;
     MYSQL
+    mysql -u${data.aws_ssm_parameter.username.value} -p${data.aws_ssm_parameter.password.value} ${data.aws_ssm_parameter.database.value} < /home/ec2-user/cmscc.sql
+    ##
     MYIP=$(curl http://169.254.169.254/latest/meta-data/local-ipv4)
-    sudo echo $MYIP > /home/ec2-user/test.txt
+    sudo cat <<-CNF > /home/ec2-user/cmscc.cnf
+    [req]
+    default_bits  = 2048
+    distinguished_name = req_distinguished_name
+    req_extensions = req_ext
+    x509_extensions = v3_req
+    prompt = no
+    [req_distinguished_name]
+    countryName = US
+    stateOrProvinceName = UTAH
+    localityName = Provo
+    organizationName = BYU
+    organizationalUnitName = OIT
+    commonName = cmscc-old.byu.edu
+    [req_ext]
+    subjectAltName = @alt_names
+    [v3_req]
+    subjectAltName = @alt_names
+    [alt_names]
+    IP.1 = $MYIP
+    CNF
+    openssl req -x509 -nodes -days 3650 -newkey rsa:2048 -keyout /home/ec2-user/cmscc.key -out /home/ec2-user/cmscc.crt -config /home/ec2-user/cmscc.cnf
+    sudo mv /home/ec2-user/cmscc.crt /etc/pki/tls/certs/
+    sudo mv /home/ec2-user/cmscc.key /etc/pki/tls/private/
+    sudo sed -i 's|/etc/pki/tls/certs/localhost.crt|/etc/pki/tls/certs/cmscc.crt|g' /etc/httpd/conf.d/ssl.conf
+    sudo sed -i 's|/etc/pki/tls/private/localhost.key|/etc/pki/tls/private/cmscc.key|g' /etc/httpd/conf.d/ssl.conf
+    ##
+    sudo sed -i 's|bulldog.byu.edu|127.0.0.1|g' /opt/webroot/cms3/inc/database_defines.php
+    sudo sed -i 's|cmsccapp|${data.aws_ssm_parameter.username.value}|g' /opt/webroot/cms3/inc/database_defines.php
+    sudo sed -i 's|VzrAbZFvs3m6jf|${data.aws_ssm_parameter.password.value}|g' /opt/webroot/cms3/inc/database_defines.php
+    sudo sed -i 's|cmsccdb_stage|${data.aws_ssm_parameter.database.value}|g' /opt/webroot/cms3/inc/database_defines.php
+    sudo sed -i "s|https://cmscc-stg.byu.edu/cms3/|https://$MYIP/cms3/|g" /opt/webroot/cms3/inc/siteconfig_vars.php
+    sudo sed -i "s|https://cmscc-stg.byu.edu/client/|https://$MYIP/client/|g" /opt/webroot/cms3/inc/siteconfig_vars.php
+    ##
+    sudo systemctl restart httpd
   EOF
+  tags = {
+    Name = "kempy Old CMS"
+  }
 }
 
 output "information" {
@@ -127,6 +225,8 @@ output "information" {
 
     chmod 400 ${aws_key_pair.generated-key.key_name}.pem
     ssh -i ${aws_key_pair.generated-key.key_name}.pem ec2-user@${aws_instance.old-cms.private_ip}
+
+    mysql -u${data.aws_ssm_parameter.username.value} -p${data.aws_ssm_parameter.password.value}
 
   EOF
 }
