@@ -80,7 +80,7 @@ resource "aws_instance" "old-cms" {
     Name = "kempy Old CMS"
   }
   subnet_id                   = var.vpn-dept-oregon-dev-private-a
-  associate_public_ip_address = true
+  associate_public_ip_address = false
   key_name                    = aws_key_pair.generated-key.key_name
   vpc_security_group_ids      = [aws_security_group.security_group.id]
   user_data                   = <<-EOF
@@ -105,5 +105,28 @@ resource "aws_instance" "old-cms" {
     sudo sed -i 's|/var/www/html|/opt/webroot|g' /etc/httpd/conf/httpd.conf
     sudo sed -i 's|/var/www|/opt/webroot|g' /etc/httpd/conf/httpd.conf
     sudo systemctl restart httpd
+    mysql --user=root <<MYSQL
+    UPDATE mysql.user SET Password=PASSWORD('rootpassword') WHERE User='root';
+    DELETE FROM mysql.user WHERE User='';
+    DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');
+    DROP DATABASE IF EXISTS test;
+    DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';
+    CREATE DATABASE compclinicdb;
+    CREATE USER ccuser@'localhost';
+    SET PASSWORD FOR ccuser@'localhost'=PASSWORD('1BDtIvvXT948ez3p1qu7iIlPkkJj8fVo');
+    GRANT ALL PRIVILEGES ON compclinicdb.* TO ccuser@'localhost' IDENTIFIED BY '1BDtIvvXT948ez3p1qu7iIlPkkJj8fVo';
+    FLUSH PRIVILEGES;
+    MYSQL
+    MYIP=$(curl http://169.254.169.254/latest/meta-data/local-ipv4)
+    sudo echo $MYIP > /home/ec2-user/test.txt
+  EOF
+}
+
+output "information" {
+  value = <<-EOF
+
+    chmod 400 ${aws_key_pair.generated-key.key_name}.pem
+    ssh -i ${aws_key_pair.generated-key.key_name}.pem ec2-user@${aws_instance.old-cms.private_ip}
+
   EOF
 }
