@@ -142,6 +142,8 @@ resource "aws_instance" "old-cms" {
   iam_instance_profile        = aws_iam_instance_profile.allow_s3_profile.name
   user_data                   = <<-EOF
     #!/bin/bash
+    sudo yum update -y
+    sudo yum upgrade -y    
     sudo yum -y install ntp
     sudo ntpdate pool.ntp.org
     sudo yum -y install httpd
