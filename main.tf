@@ -213,7 +213,7 @@ resource "aws_instance" "old-cms" {
     sudo sed -i 's|/etc/pki/tls/certs/localhost.crt|/etc/pki/tls/certs/cmscc.crt|g' /etc/httpd/conf.d/ssl.conf
     sudo sed -i 's|/etc/pki/tls/private/localhost.key|/etc/pki/tls/private/cmscc.key|g' /etc/httpd/conf.d/ssl.conf
     ##
-    sudo sed -i "s|'DB_HOST', ''|'DB_HOST', '127.0.0.1|g" /opt/webroot/cms3/inc/database_defines.php
+    sudo sed -i "s|'DB_HOST', ''|'DB_HOST', '127.0.0.1'|g" /opt/webroot/cms3/inc/database_defines.php
     sudo sed -i "s|'DB_USERNAME', ''|'DB_USERNAME', '${data.aws_ssm_parameter.username.value}'|g" /opt/webroot/cms3/inc/database_defines.php
     sudo sed -i "s|'DB_PASSWORD', ''|'DB_PASSWORD', '${data.aws_ssm_parameter.password.value}'|g" /opt/webroot/cms3/inc/database_defines.php
     sudo sed -i "s|'DB_DATABASE', ''|'DB_DATABASE', '${data.aws_ssm_parameter.database.value}'|g" /opt/webroot/cms3/inc/database_defines.php
