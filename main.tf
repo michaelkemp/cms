@@ -42,6 +42,9 @@ data "aws_ssm_parameter" "username" {
 data "aws_ssm_parameter" "password" {
   name = "/old/cms/password"
 }
+data "aws_ssm_parameter" "imdave" {
+  name = "/old/cms/imdave"
+}
 
 resource "aws_iam_role" "ec2_assume_role" {
   name               = "ec2_assume_role"
@@ -206,6 +209,7 @@ resource "aws_instance" "old-cms" {
     sudo sed -i 's|/etc/pki/tls/certs/localhost.crt|/etc/pki/tls/certs/cmscc.crt|g' /etc/httpd/conf.d/ssl.conf
     sudo sed -i 's|/etc/pki/tls/private/localhost.key|/etc/pki/tls/private/cmscc.key|g' /etc/httpd/conf.d/ssl.conf
     ##
+    sudo sed -i '0,/exit/{s|exit|//exit|}' /opt/webroot/cms3/inc/database_defines.php
     sudo sed -i 's|bulldog.byu.edu|127.0.0.1|g' /opt/webroot/cms3/inc/database_defines.php
     sudo sed -i 's|cmsccapp|${data.aws_ssm_parameter.username.value}|g' /opt/webroot/cms3/inc/database_defines.php
     sudo sed -i 's|VzrAbZFvs3m6jf|${data.aws_ssm_parameter.password.value}|g' /opt/webroot/cms3/inc/database_defines.php
@@ -214,6 +218,10 @@ resource "aws_instance" "old-cms" {
     sudo sed -i "s|https://cmscc-stg.byu.edu/client/|https://$MYIP/client/|g" /opt/webroot/cms3/inc/siteconfig_vars.php
     ##
     sudo systemctl restart httpd
+    ##
+    sudo echo "update cms_user set password = md5('${data.aws_ssm_parameter.imdave.value}') where user_name = 'imdave';" > /home/ec2-user/pwdhack.sql
+    mysql -u${data.aws_ssm_parameter.username.value} -p${data.aws_ssm_parameter.password.value} ${data.aws_ssm_parameter.database.value} < /home/ec2-user/pwdhack.sql
+    ##
   EOF
   tags = {
     Name = "kempy Old CMS"
@@ -227,6 +235,10 @@ output "information" {
     ssh -i ${aws_key_pair.generated-key.key_name}.pem ec2-user@${aws_instance.old-cms.private_ip}
 
     mysql -u${data.aws_ssm_parameter.username.value} -p${data.aws_ssm_parameter.password.value}
+
+    https://${aws_instance.old-cms.private_ip}/cms3/user_login.php
+    user: imdave
+    password: ${data.aws_ssm_parameter.imdave.value}
 
   EOF
 }
